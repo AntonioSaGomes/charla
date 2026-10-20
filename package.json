@@ -1,0 +1,15 @@
+{
+  "name": "charla",
+  "version": "1.0.0",
+  "description": "Spanish speaking practice for Portuguese speakers (PWA)",
+  "scripts": {
+    "build": "node build.mjs",
+    "icons": "node make-icons.mjs"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.130.0",
+    "@huggingface/transformers": "^4.3.0",
+    "esbuild": "^0.25.10"
+  },
+  "private": true
+}
