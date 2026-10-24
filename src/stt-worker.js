@@ -3,6 +3,8 @@ import { pipeline, env } from '@huggingface/transformers';
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
+// Single-threaded WebAssembly keeps memory low enough for iPhone Safari.
+if (env.backends && env.backends.onnx && env.backends.onnx.wasm) env.backends.onnx.wasm.numThreads = 1;
 
 let asr = null;
 let current = '';
@@ -25,9 +27,10 @@ function progressReporter() {
   };
 }
 
-async function build(model) {
+async function build(model, allowGpu) {
   const progress_callback = progressReporter();
-  if (await hasWebGPU()) {
+  // iPhone Safari runs out of memory loading Whisper on the GPU, so it always uses WebAssembly.
+  if (allowGpu && await hasWebGPU()) {
     try {
       const p = await pipeline('automatic-speech-recognition', model, { device: 'webgpu', dtype: { encoder_model: 'fp32', decoder_model_merged: 'q4' }, progress_callback });
       device = 'webgpu';
@@ -39,13 +42,13 @@ async function build(model) {
   return p;
 }
 
-async function load(model) {
+async function load(model, allowGpu = false) {
   if (asr && current === model) return;
   if (loading && loading.model === model) return loading.promise;
   const promise = (async () => {
     if (asr && asr.dispose) { try { await asr.dispose(); } catch (e) {} }
     asr = null;
-    const p = await build(model);
+    const p = await build(model, allowGpu);
     postMessage({ type: 'warming' });
     await p(new Float32Array(16000), { language: 'spanish', task: 'transcribe' });
     asr = p; current = model;
@@ -61,10 +64,10 @@ self.addEventListener('error', e => postMessage({ type: 'error', message: String
 self.onmessage = async ({ data }) => {
   try {
     if (data.type === 'load') {
-      await load(data.model);
+      await load(data.model, !!data.allowGpu);
       postMessage({ type: 'ready', device, model: current });
     } else if (data.type === 'transcribe') {
-      await load(data.model);
+      await load(data.model, !!data.allowGpu);
       const out = await asr(data.audio, { language: 'spanish', task: 'transcribe', chunk_length_s: 30, stride_length_s: 5 });
       postMessage({ type: 'result', id: data.id, text: String((out && out.text) || '').trim() });
     }

@@ -1,7 +1,7 @@
 import { VARIANTS, SCENARIOS, SCENE_ICONS, SCENE_COLORS, TYPES, GROUPS, PRON, FALSE, GRAM, MODELS, STT_MODELS } from './data.js';
 import { store, noteKey, today } from './store.js';
 import { Recorder, tts, rms } from './audio.js';
-import { loadStt, transcribe, onStt, sttState } from './stt.js';
+import { loadStt, transcribe, onStt, sttState, takeCrashedModel } from './stt.js';
 import * as claude from './claude.js';
 
 /* ---------- helpers ---------- */
@@ -974,4 +974,12 @@ tts.onVoices(() => { if (state.tab === 'settings') renderSettings(); });
 showTab('home');
 if (!S.onboarded || !S.apiKey) showOnboarding(true);
 // Warm up a model downloaded on an earlier visit so the first tap on the mic is instant.
-if (S.sttReady) setTimeout(() => loadStt(S.sttModel), 1200);
+const crashed = takeCrashedModel();
+if (crashed) {
+  // iOS closed the app while loading that model: step down to a smaller one instead of crashing again.
+  const order = STT_MODELS.map(m => m.id);
+  const i = order.indexOf(crashed);
+  S.sttModel = order[Math.max(0, i - 1)]; S.sttReady = false; store.saveSettings();
+  const m = STT_MODELS.find(x => x.id === S.sttModel);
+  setTimeout(() => openSheet(`${sheetHead('Speech recognition')}<p class="sheet-p">Your iPhone ran out of memory loading the speech model, so iOS closed the app. ${i > 0 ? `I've switched to the smaller <b>${esc(m.label)}</b> model (${esc(m.note.split('.')[0].replace('About ', 'about '))}).` : 'This is already the smallest model. Close other apps and try again.'}</p><button class="btn primary wide" data-act="stt-load">${ico('download')}Try again</button>`), 600);
+} else if (S.sttReady) setTimeout(() => loadStt(S.sttModel), 1200);

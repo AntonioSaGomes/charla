@@ -140,6 +140,7 @@ export const MODELS = [
 ];
 
 export const STT_MODELS = [
-  { id: 'onnx-community/whisper-base', label: 'Estándar', note: 'About 80 MB. Quick on any recent iPhone.' },
-  { id: 'onnx-community/whisper-small', label: 'Preciso', note: 'About 250 MB. Understands accents better; slower on older phones.' }
+  { id: 'onnx-community/whisper-tiny', label: 'Ligero', note: 'About 40 MB. Uses the least memory; makes more mistakes.' },
+  { id: 'onnx-community/whisper-base', label: 'Estándar', note: 'About 80 MB. A good balance on most iPhones.' },
+  { id: 'onnx-community/whisper-small', label: 'Preciso', note: 'About 250 MB. Understands accents best; needs a recent iPhone.' }
 ];
