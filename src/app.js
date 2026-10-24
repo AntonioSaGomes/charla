@@ -3,6 +3,7 @@ import { store, noteKey, today } from './store.js';
 import { Recorder, tts, rms } from './audio.js';
 import { loadStt, transcribe, onStt, sttState, takeCrashedModel } from './stt.js';
 import * as claude from './claude.js';
+import { log, getLog, clearLog, envReport } from './diag.js';
 
 /* ---------- helpers ---------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -293,6 +294,7 @@ async function runTurn(msg) {
     say(n.reply);
   } catch (e) {
     const code = e.code || 'unknown';
+    log('claude', `turn failed: ${code} ${e.message || ''}`);
     if (msg) { msg.failed = code; msg.err = e.message; } else { chat.openFailed = code; chat.openErr = e.message; }
   } finally {
     state.busy = false; state.streaming = null; state.ctl = null;
@@ -480,8 +482,9 @@ async function startRec(target) {
   if (!sttUsable()) return;
   tts.stop(); tts.unlock();
   const rec = new Recorder();
-  try { await rec.start(); }
+  try { await rec.start(); log('mic', `recording for ${target}`); }
   catch (e) {
+    log('mic', `could not start: ${e && (e.name + ' ' + e.message)}`);
     openSheet(`${sheetHead('Microphone blocked')}<p class="sheet-p">Charla needs the microphone to hear you. When iOS asks, tap <b>Allow</b>. If you said no before, open <b>Settings › Apps › Safari › Microphone</b> and choose <b>Ask</b> or <b>Allow</b>, then try again.</p>`);
     return;
   }
@@ -511,7 +514,7 @@ async function stopRec(send) {
   state.recMode = 'transcribing'; rerender();
   let text = '';
   try { text = await transcribe(audio, S.sttModel); }
-  catch (e) { toast('Speech recognition failed. Try again, or switch to typing.'); }
+  catch (e) { log('stt', `transcribe failed: ${e && e.message}`); toast('Speech recognition failed. Try again, or switch to typing.'); }
   state.recMode = 'idle';
   if (target === 'chat') {
     renderDock();
@@ -746,6 +749,9 @@ function renderSettings() {
     <section class="sec"><h3 class="group-title">Apariencia</h3><div class="group">
       <div class="row-item static col"><span class="row-text"><b>Tema</b></span>${seg('theme', [['auto', 'Automático'], ['light', 'Claro'], ['dark', 'Oscuro']])}</div>
     </div></section>
+    <section class="sec"><h3 class="group-title">Ayuda</h3><div class="group">
+      <button class="row-item" data-act="diag"><span class="row-ico">${ico('wave')}</span><span class="row-text"><b>Diagnóstico</b><span>A log of what the app did, to copy and send when something breaks</span></span>${ico('chev', 'row-chev')}</button>
+    </div></section>
     <section class="sec"><h3 class="group-title">Datos</h3><div class="group">
       <button class="row-item" data-act="export"><span class="row-ico">${ico('share')}</span><span class="row-text"><b>Export a backup</b><span>Conversations, notebook and progress</span></span>${ico('chev', 'row-chev')}</button>
       <label class="row-item"><span class="row-ico">${ico('download')}</span><span class="row-text"><b>Import a backup</b><span>Replaces what's on this device</span></span><input type="file" accept="application/json,.json" id="importFile" hidden>${ico('chev', 'row-chev')}</label>
@@ -908,6 +914,9 @@ document.addEventListener('click', e => {
     case 'stt-load': loadStt(S.sttModel); break;
     case 'test-voice': speak(S.variant === 'ar' ? 'Hola, ¿cómo andás? Encantada de conocerte.' : 'Hola, ¿qué tal? Encantada de conocerte.'); break;
     case 'edit-key': openKeySheet(); break;
+    case 'diag': openDiag(); break;
+    case 'diag-copy': copyDiag(); break;
+    case 'diag-clear': clearLog(); openDiag(); break;
     case 'save-key': saveKey('#keyInput', '#keyMsg', () => { setTimeout(closeSheet, 600); renderSettings(); }); break;
     case 'export': exportData(); break;
     case 'wipe': state.confirm = 'wipe'; renderSettings(); break;
@@ -942,6 +951,27 @@ document.addEventListener('keydown', e => {
 });
 $('#sheetLayer').addEventListener('click', e => { if (e.target.classList.contains('sheet-backdrop')) closeSheet(); });
 
+async function diagText() {
+  const env = await envReport();
+  const st = `speech: ${sttState.status} ${sttState.model || S.sttModel} ${sttState.device || ''} ${sttState.error || ''}`;
+  return ['CHARLA DIAGNOSTICS', ...env, st, `claude model: ${S.model}`, '', ...getLog()].join('\n');
+}
+async function openDiag() {
+  const text = await diagText();
+  openSheet(`${sheetHead('Diagnóstico', 'Copy this and paste it in the chat so the problem can be traced.')}
+    <div class="diag-actions"><button class="btn primary" data-act="diag-copy">Copy log</button><button class="btn" data-act="diag-clear">Clear</button></div>
+    <pre class="diag" id="diagText">${esc(text)}</pre>`, { tall: true });
+}
+async function copyDiag() {
+  const text = await diagText();
+  try { await navigator.clipboard.writeText(text); toast('Log copied.'); }
+  catch (e) {
+    const el = $('#diagText'); if (!el) return;
+    const r = document.createRange(); r.selectNodeContents(el); const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    toast('Select all and copy.');
+  }
+}
+
 function exportData() {
   const blob = new Blob([store.exportAll()], { type: 'application/json' });
   const file = new File([blob], `charla-${today()}.json`, { type: 'application/json' });
@@ -974,7 +1004,10 @@ tts.onVoices(() => { if (state.tab === 'settings') renderSettings(); });
 showTab('home');
 if (!S.onboarded || !S.apiKey) showOnboarding(true);
 // Warm up a model downloaded on an earlier visit so the first tap on the mic is instant.
+// iPhone Safari can't hold the base model in memory, so iPhones move to the tiny one unless it's already working.
+if (isIOS && !S.sttMigrated) { if (!S.sttReady && S.sttModel !== 'onnx-community/whisper-tiny') S.sttModel = 'onnx-community/whisper-tiny'; S.sttMigrated = true; store.saveSettings(); }
 const crashed = takeCrashedModel();
+log('app', `opened (${isStandalone() ? 'home screen' : 'browser'})${crashed ? ` after a crash while loading ${crashed}` : ''}`);
 if (crashed) {
   // iOS closed the app while loading that model: step down to a smaller one instead of crashing again.
   const order = STT_MODELS.map(m => m.id);

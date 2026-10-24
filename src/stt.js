@@ -1,4 +1,5 @@
 // Main-thread side of on-device speech recognition.
+import { log } from './diag.js';
 let worker = null;
 let nextId = 1;
 const pending = new Map();
@@ -10,8 +11,12 @@ export function onStt(f) { listeners.add(f); return () => listeners.delete(f); }
 
 function ensureWorker() {
   if (worker) return worker;
+  log('stt', 'starting speech worker');
   worker = new Worker(new URL('./stt-worker.js', import.meta.url), { type: 'module' });
+  worker.onmessageerror = () => log('stt', 'worker message could not be read');
   worker.onmessage = ({ data }) => {
+    if (data.type === 'log') { log('worker', data.msg); return; }
+    if (data.type !== 'progress') log('stt', `worker says ${data.type}${data.message ? `: ${data.message}` : ''}${data.device ? ` (${data.device})` : ''}`);
     if (data.type === 'progress') { sttState.status = 'downloading'; sttState.loaded = data.loaded; sttState.total = data.total; emit(); }
     else if (data.type === 'warming') { sttState.status = 'warming'; emit(); }
     else if (data.type === 'ready') { mark(null); Object.assign(sttState, { status: 'ready', device: data.device, model: data.model, error: '' }); emit(); }
@@ -22,7 +27,7 @@ function ensureWorker() {
       else { mark(null); sttState.status = 'error'; sttState.error = data.message; emit(); }
     }
   };
-  worker.onerror = e => { e.preventDefault && e.preventDefault(); worker = null; mark(null); sttState.status = 'error'; sttState.error = e.message || 'The speech engine could not start on this device.'; emit(); };
+  worker.onerror = e => { log('stt', `worker failed: ${e.message || '(no message)'} at ${(e.filename || '').split('/').pop()}:${e.lineno || '?'}`); e.preventDefault && e.preventDefault(); worker = null; mark(null); sttState.status = 'error'; sttState.error = e.message || 'The speech engine could not start on this device.'; emit(); };
   return worker;
 }
 
@@ -42,6 +47,7 @@ export function loadStt(model) {
   if (sttState.status === 'ready' && sttState.model === model) return;
   sttState.status = 'downloading'; sttState.model = model; sttState.error = ''; sttState.loaded = 0; sttState.total = 0; emit();
   mark(model);
+  log('stt', `load requested: ${model} (iOS: ${IOS})`);
   ensureWorker().postMessage({ type: 'load', model, allowGpu: !IOS });
 }
 
