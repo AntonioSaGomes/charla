@@ -1,5 +1,5 @@
 // Runs Whisper on the device. Model files come from Hugging Face once and are then cached by the browser.
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.0/dist/transformers.web.min.js';
+import { pipeline, env } from '@huggingface/transformers';
 
 env.allowLocalModels = false;
 env.useBrowserCache = true;
@@ -53,6 +53,10 @@ async function load(model) {
   loading = { model, promise };
   try { await promise; } finally { loading = null; }
 }
+
+// Anything that escapes the handlers below still reaches the app with its real message.
+self.addEventListener('unhandledrejection', e => postMessage({ type: 'error', message: String((e.reason && e.reason.message) || e.reason) }));
+self.addEventListener('error', e => postMessage({ type: 'error', message: String(e.message || e) }));
 
 self.onmessage = async ({ data }) => {
   try {

@@ -22,7 +22,7 @@ function ensureWorker() {
       else { sttState.status = 'error'; sttState.error = data.message; emit(); }
     }
   };
-  worker.onerror = e => { sttState.status = 'error'; sttState.error = e.message || 'The speech engine stopped.'; emit(); };
+  worker.onerror = e => { e.preventDefault && e.preventDefault(); worker = null; sttState.status = 'error'; sttState.error = e.message || 'The speech engine could not start on this device.'; emit(); };
   return worker;
 }
 
