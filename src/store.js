@@ -4,7 +4,7 @@ const K = { settings: 'charla.settings', chats: 'charla.chats', notebook: 'charl
 export const DEFAULTS = {
   apiKey: '', model: 'claude-haiku-5-5', variant: 'es', level: 'B1', lang: 'en',
   voice: '', rate: 0.95, autoplay: true, sttModel: 'onnx-community/whisper-base', sttReady: false,
-  theme: 'auto', onboarded: false
+  theme: 'auto', onboarded: false, sttEngine: 'groq', groqKey: ''
 };
 
 function get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }

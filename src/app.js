@@ -4,6 +4,7 @@ import { Recorder, tts, rms } from './audio.js';
 import { loadStt, transcribe, onStt, sttState, takeCrashedModel } from './stt.js';
 import * as claude from './claude.js';
 import { log, getLog, clearLog, envReport } from './diag.js';
+import { groqTranscribe, verifyGroqKey } from './groq.js';
 
 /* ---------- helpers ---------- */
 const $ = (s, el = document) => el.querySelector(s);
@@ -472,10 +473,27 @@ const pct = () => sttState.total ? Math.round(sttState.loaded / sttState.total *
 
 /* microphone */
 function sttUsable() {
+  if (S.sttEngine === 'groq') { if (S.groqKey) return true; openGroqSheet(); return false; }
   if (sttState.status === 'ready' || sttState.status === 'warming') return true;
   if (sttState.status === 'downloading' && S.sttReady) return true; // loading from cache: transcribe waits for it
   openVoiceSheet();
   return false;
+}
+async function transcribeAny(audio) {
+  if (S.sttEngine === 'groq' && S.groqKey) {
+    try { return await groqTranscribe(audio, S.groqKey); }
+    catch (e) {
+      // If Groq can't be reached but the on-device model is loaded, use it for this message.
+      if ((e.code === 'network' || e.code === 'server') && sttState.status === 'ready') { log('stt', `Groq ${e.code}; using the on-device model`); return transcribe(audio, S.sttModel); }
+      e.shown = true;
+      toast(e.code === 'auth' ? 'Groq rejected your key. Check it in Ajustes.'
+        : e.code === 'rate' ? "You've hit Groq's free limit for now. Try again in a minute."
+        : e.code === 'network' ? "Couldn't reach Groq. Check your connection and try again."
+        : 'Groq had a problem. Try again in a moment.', 4000);
+      throw e;
+    }
+  }
+  return transcribe(audio, S.sttModel);
 }
 async function startRec(target) {
   if (state.recMode !== 'idle') return;
@@ -513,8 +531,8 @@ async function stopRec(send) {
   if (seconds < 0.5 || rms(audio) < 0.003) { state.recMode = 'idle'; rerender(); toast("I couldn't hear you. Hold the phone closer and try again."); return; }
   state.recMode = 'transcribing'; rerender();
   let text = '';
-  try { text = await transcribe(audio, S.sttModel); }
-  catch (e) { log('stt', `transcribe failed: ${e && e.message}`); toast('Speech recognition failed. Try again, or switch to typing.'); }
+  try { text = await transcribeAny(audio); }
+  catch (e) { log('stt', `transcribe failed: ${e && e.message}`); if (!e.shown) toast('Speech recognition failed. Try again, or switch to typing.'); }
   state.recMode = 'idle';
   if (target === 'chat') {
     renderDock();
@@ -743,9 +761,15 @@ function renderSettings() {
         <div class="rate"><input type="range" min="0.6" max="1.2" step="0.05" value="${S.rate}" data-setting="rate" aria-label="Velocidad"><button class="pill-btn sm" data-act="test-voice">${ico('play')}Probar</button></div></div>
     </div></section>
     <section class="sec"><h3 class="group-title">Reconocimiento de voz</h3><div class="group">
-      ${STT_MODELS.map(m => `<button class="row-item radio" data-act="stt-model" data-v="${m.id}"><span class="row-text"><b>${esc(m.label)}</b><span>${esc(m.note)}</span></span><span class="radio-dot ${S.sttModel === m.id ? 'on' : ''}"></span></button>`).join('')}
-      <div id="sttRow">${sttRow()}</div>
-    </div><p class="group-foot">Your voice is turned into text on this iPhone. Audio never leaves the device; only the text goes to Claude.</p></section>
+      <button class="row-item radio" data-act="set" data-k="sttEngine" data-v="groq"><span class="row-text"><b>Groq · Whisper large</b><span>Most accurate, about half a second. Free key.</span></span><span class="radio-dot ${S.sttEngine === 'groq' ? 'on' : ''}"></span></button>
+      <button class="row-item radio" data-act="set" data-k="sttEngine" data-v="device"><span class="row-text"><b>En el iPhone</b><span>Private and offline, but much less accurate.</span></span><span class="radio-dot ${S.sttEngine === 'device' ? 'on' : ''}"></span></button>
+    </div>
+    ${S.sttEngine === 'groq' ? `<div class="group"><button class="row-item" data-act="edit-groq"><span class="row-ico">${ico('key')}</span><span class="row-text"><b>Groq key</b><span>${S.groqKey ? esc(`${S.groqKey.slice(0, 8)}…${S.groqKey.slice(-4)}`) : 'Not set: tap to add it'}</span></span>${ico('chev', 'row-chev')}</button></div>
+      <p class="group-foot">Your recording is sent to Groq to be turned into text, then deleted from your phone's memory. Only the text goes to Claude.</p>`
+    : `<div class="group">${STT_MODELS.map(m => `<button class="row-item radio" data-act="stt-model" data-v="${m.id}"><span class="row-text"><b>${esc(m.label)}</b><span>${esc(m.note)}</span></span><span class="radio-dot ${S.sttModel === m.id ? 'on' : ''}"></span></button>`).join('')}
+      <div id="sttRow">${sttRow()}</div></div>
+      <p class="group-foot">Your voice is turned into text on this iPhone. Audio never leaves the device; only the text goes to Claude.</p>`}
+    </section>
     <section class="sec"><h3 class="group-title">Apariencia</h3><div class="group">
       <div class="row-item static col"><span class="row-text"><b>Tema</b></span>${seg('theme', [['auto', 'Automático'], ['light', 'Claro'], ['dark', 'Oscuro']])}</div>
     </div></section>
@@ -779,6 +803,24 @@ async function saveKey(inputSel, msgSel, after) {
   catch (e) { msg.textContent = e.code === 'network' ? errText('network') : e.code === 'auth' ? 'Anthropic rejected this key. Copy it again from the console.' : errText(e.code, e.message); msg.className = 'key-msg bad'; }
 }
 
+function openGroqSheet() {
+  openSheet(`${sheetHead('Groq key', 'Free. Turns your voice into text with the most accurate Whisper model.')}
+    <ol class="steps"><li>Open <b>console.groq.com</b> and sign up (Google sign-in works). No card needed.</li><li>Go to <b>API Keys</b>, tap <b>Create API Key</b>, and copy it.</li><li>Paste it here.</li></ol>
+    <a class="link-btn" href="https://console.groq.com/keys" target="_blank" rel="noopener">Open Groq API keys ${ico('chev')}</a>
+    <div class="field-wrap"><input id="groqInput" class="field" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="gsk_…" value="${esc(S.groqKey)}"></div>
+    <p class="key-msg" id="groqMsg"></p>
+    <button class="btn primary wide" data-act="save-groq">Check and save</button>
+    <button class="btn wide" data-act="use-device">Use the on-device engine instead</button>
+    <p class="sheet-small">The key is stored only on this iPhone. Recordings go to Groq only to be transcribed.</p>`);
+}
+async function saveGroq(inputSel, msgSel, after) {
+  const input = $(inputSel), msg = $(msgSel);
+  const key = (input ? input.value : '').trim();
+  if (!/^gsk_/.test(key)) { msg.textContent = 'That doesn\'t look like a Groq key. It starts with "gsk_".'; msg.className = 'key-msg bad'; return; }
+  msg.textContent = 'Checking…'; msg.className = 'key-msg';
+  try { await verifyGroqKey(key); S.groqKey = key; S.sttEngine = 'groq'; store.saveSettings(); log('groq', 'key verified'); msg.textContent = 'Key works.'; msg.className = 'key-msg good'; after && after(); }
+  catch (e) { msg.textContent = e.code === 'auth' ? 'Groq rejected this key. Copy it again from the console.' : e.code === 'network' ? "Couldn't reach Groq from this page. Check your connection, then send me the Diagnóstico log." : `Groq said: ${e.message}`; msg.className = 'key-msg bad'; }
+}
 function openVoiceSheet() {
   openSheet(`${sheetHead('Speech recognition', 'Turns your voice into text on this iPhone.')}<div id="voiceSheetBody">${voiceSheetBody()}</div>`);
 }
@@ -817,7 +859,14 @@ function renderOnboarding() {
     <p class="ob-label">Explanations in</p>
     ${seg('lang', [['en', 'English'], ['pt', 'Português']])}
     <button class="btn primary wide big" data-act="ob-next">Continuar</button>`;
-  if (step === 3) body = `<div class="ob-head"><span class="ob-ico">${ico('wave')}</span><h2>Your voice</h2><p>Charla turns your speech into text on the iPhone, so audio never leaves it. It needs a one-time download of about 80 MB.</p></div>
+  if (step === 3 && S.sttEngine === 'groq') body = `<div class="ob-head"><span class="ob-ico">${ico('wave')}</span><h2>Your voice</h2><p>Charla sends your recordings to Groq, which runs the most accurate Whisper model for free. You need a free Groq key.</p></div>
+    <ol class="steps"><li>Open <b>console.groq.com</b> and sign up. No card needed.</li><li>Create a key under <b>API Keys</b> and copy it.</li><li>Paste it below.</li></ol>
+    <a class="link-btn" href="https://console.groq.com/keys" target="_blank" rel="noopener">Open Groq API keys ${ico('chev')}</a>
+    <div class="field-wrap"><input id="obGroq" class="field" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="gsk_…" value="${esc(S.groqKey)}"></div>
+    <p class="key-msg" id="obGroqMsg"></p>
+    <button class="btn primary wide big" data-act="ob-groq">Check and start</button>
+    <button class="btn wide" data-act="ob-device">Use on-device recognition instead</button>`;
+  else if (step === 3) body = `<div class="ob-head"><span class="ob-ico">${ico('wave')}</span><h2>Your voice</h2><p>Charla turns your speech into text on the iPhone, so audio never leaves it. It needs a one-time download of about 40 MB.</p></div>
     <div id="obVoice">${obVoice()}</div>
     <button class="btn primary wide big" data-act="ob-done">${sttState.status === 'ready' ? `Hablar con ${esc(v.a)}` : 'Continue'}</button>
     ${sttState.status === 'ready' ? '' : '<p class="sheet-small">You can keep going while it downloads.</p>'}`;
@@ -912,6 +961,11 @@ document.addEventListener('click', e => {
     }
     case 'stt-model': if (S.sttModel !== d.v) { S.sttModel = d.v; S.sttReady = false; store.saveSettings(); sttState.status = 'idle'; renderSettings(); } break;
     case 'stt-load': loadStt(S.sttModel); break;
+    case 'edit-groq': openGroqSheet(); break;
+    case 'save-groq': saveGroq('#groqInput', '#groqMsg', () => { setTimeout(closeSheet, 600); if (state.tab === 'settings') renderSettings(); }); break;
+    case 'use-device': S.sttEngine = 'device'; store.saveSettings(); closeSheet(); if (state.tab === 'settings') renderSettings(); setTimeout(openVoiceSheet, 350); break;
+    case 'ob-groq': saveGroq('#obGroq', '#obGroqMsg', () => setTimeout(() => { S.onboarded = true; store.saveSettings(); showOnboarding(false); showTab('home'); startChat('libre'); }, 500)); break;
+    case 'ob-device': S.sttEngine = 'device'; store.saveSettings(); renderOnboarding(); break;
     case 'test-voice': speak(S.variant === 'ar' ? 'Hola, ¿cómo andás? Encantada de conocerte.' : 'Hola, ¿qué tal? Encantada de conocerte.'); break;
     case 'edit-key': openKeySheet(); break;
     case 'diag': openDiag(); break;
@@ -1015,4 +1069,4 @@ if (crashed) {
   S.sttModel = order[Math.max(0, i - 1)]; S.sttReady = false; store.saveSettings();
   const m = STT_MODELS.find(x => x.id === S.sttModel);
   setTimeout(() => openSheet(`${sheetHead('Speech recognition')}<p class="sheet-p">Your iPhone ran out of memory loading the speech model, so iOS closed the app. ${i > 0 ? `I've switched to the smaller <b>${esc(m.label)}</b> model (${esc(m.note.split('.')[0].replace('About ', 'about '))}).` : 'This is already the smallest model. Close other apps and try again.'}</p><button class="btn primary wide" data-act="stt-load">${ico('download')}Try again</button>`), 600);
-} else if (S.sttReady) setTimeout(() => loadStt(S.sttModel), 1200);
+} else if (S.sttReady && S.sttEngine === 'device') setTimeout(() => loadStt(S.sttModel), 1200);
