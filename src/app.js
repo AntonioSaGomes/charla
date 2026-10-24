@@ -1060,8 +1060,10 @@ if (!S.onboarded || !S.apiKey) showOnboarding(true);
 // Warm up a model downloaded on an earlier visit so the first tap on the mic is instant.
 // iPhone Safari can't hold the base model in memory, so iPhones move to the tiny one unless it's already working.
 if (isIOS && !S.sttMigrated) { if (!S.sttReady && S.sttModel !== 'onnx-community/whisper-tiny') S.sttModel = 'onnx-community/whisper-tiny'; S.sttMigrated = true; store.saveSettings(); }
-const crashed = takeCrashedModel();
-log('app', `opened (${isStandalone() ? 'home screen' : 'browser'})${crashed ? ` after a crash while loading ${crashed}` : ''}`);
+const crashedRaw = takeCrashedModel();
+// The crash notice only matters when speech runs on the phone.
+const crashed = S.sttEngine === 'device' ? crashedRaw : null;
+log('app', `opened (${isStandalone() ? 'home screen' : 'browser'}, speech: ${S.sttEngine})${crashedRaw ? ` after a load of ${crashedRaw} was cut off${crashed ? '' : ' (ignored: speech uses Groq)'}` : ''}`);
 if (crashed) {
   // iOS closed the app while loading that model: step down to a smaller one instead of crashing again.
   const order = STT_MODELS.map(m => m.id);

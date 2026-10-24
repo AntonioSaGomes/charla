@@ -1,5 +1,5 @@
 // Caches the app so it opens instantly and offline. Claude API calls always go to the network.
-const VERSION = 'mvmsrteh';
+const VERSION = 'mvmtbs5n';
 const SHELL = `charla-shell-${VERSION}`;
 const RUNTIME = 'charla-runtime';
 const FILES = ['./', './index.html', './app.js', './stt-worker.js', './styles.css', './manifest.webmanifest',

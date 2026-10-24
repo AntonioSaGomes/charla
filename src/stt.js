@@ -43,6 +43,13 @@ export function takeCrashedModel() {
   return m;
 }
 
+// Leaving the app (swiping it away, switching apps) is not a crash: only a load that was cut off
+// while the app was on screen counts.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') mark(null);
+  else if (sttState.status === 'downloading' || sttState.status === 'warming') mark(sttState.model);
+});
+
 export function loadStt(model) {
   if (sttState.status === 'ready' && sttState.model === model) return;
   sttState.status = 'downloading'; sttState.model = model; sttState.error = ''; sttState.loaded = 0; sttState.total = 0; emit();
